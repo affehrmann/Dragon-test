@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Flappy Dragon (iPhone)</title>
+  <style>
+    :root {
+      --bg1: #6ec1ff;
+      --bg2: #bfe6ff;
+      --fg: #0b132b;
+      --accent: #ffcc00;
+      --pipe: #2a9d8f;
+      --pipe-dark: #1f776e;
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      -webkit-user-select: none;
+      user-select: none;
+      overscroll-behavior: none;
+      touch-action: none; /* we'll handle touches */
+    }
+    #wrap {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      grid-template-rows: 1fr auto;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+    }
+    #hud {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: env(safe-area-inset-top) 16px 8px 16px;
+      color: var(--fg);
+      pointer-events: none;
+    }
+    #score {
+      font-weight: 800;
+      font-size: 20px;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.7);
+    }
+    #btns {
+      position: fixed;
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      padding: 12px;
+    }
+    .btn {
+      pointer-events: auto;
+      background: rgba(255,255,255,0.85);
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-weight: 700;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+      min-width: 120px;
+    }
+    .btn:active { transform: translateY(1px); }
+    #toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(76px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 20px;
+      font-size: 14px;
+      opacity: 0;
+      transition: opacity .25s ease;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, rgba(0,0,0,0.15), rgba(0,0,0,0.25));
+      color: white;
+      text-align: center;
+      padding: 24px;
+      backdrop-filter: blur(2px);
+    }
+    .card {
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 16px;
+      padding: 20px;
+      max-width: 520px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 28px;
+    }
+    p { margin: 6px 0; }
+    .kbd {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.25);
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="game"></canvas>
+  </div>
+
+  <div id="hud">
+    <div id="score">0</div>
+    <div id="best" aria-label="Mejor puntuación">🏆 0</div>
+  </div>
+
+  <div id="btns">
+    <button class="btn" id="tapBtn" aria-label="Saltar">TAP</button>
+    <button class="btn" id="pauseBtn" aria-label="Pausar">Pausa</button>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="overlay" hidden>
+    <div class="card">
+      <h1>🐲 Flappy Dragon</h1>
+      <p>Toca la pantalla o el botón <span class="kbd">TAP</span> para batir las alas.</p>
+      <p>Evita las torres, suma puntos al pasar cada par.</p>
+      <p style="opacity:.9; font-size: 14px;">Consejo: toques cortos y rítmicos. Gira el iPhone en vertical.</p>
+      <div style="margin-top:12px; display:flex; gap:10px; justify-content:center; flex-wrap: wrap;">
+        <button class="btn" id="playBtn">Jugar</button>
+        <button class="btn" id="howBtn">¿Cómo?</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // Canvas + HiDPI scaling
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
+  const DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 3)); // clamp for perf
+
+  function resize() {
+    const w = Math.floor(window.innerWidth);
+    const h = Math.floor(window.innerHeight);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.width = Math.floor(w * DPR);
+    canvas.height = Math.floor(h * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Game state
+  const state = {
+    running: false,
+    paused: false,
+    over: false,
+    score: 0,
+    best: parseInt(localStorage.getItem('flappy_dragon_best') || '0', 10),
+    frame: 0,
+    speed: 2.2,
+    gravity: 0.58,
+    lift: -9.6,
+    gap: 160,
+    pipes: [],
+    dragon: { x: 80, y: canvas.height / (2*DPR), w: 42, h: 34, vy: 0, angle: 0 },
+    skyOffset: 0
+  };
+
+  // Simple sprite shapes (vector)
+  function drawDragon() {
+    const { x, y, w, h, angle } = state.dragon;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    // Body
+    ctx.fillStyle = '#d62828';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, w*0.55, h*0.5, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Belly
+    ctx.fillStyle = '#ffb703';
+    ctx.beginPath();
+    ctx.ellipse(-4, 6, w*0.35, h*0.28, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Eye
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(w*0.15, -6, 6, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(w*0.18, -6, 2.5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Wing (flap)
+    const flap = Math.sin(state.frame * 0.4) * 8;
+    ctx.fillStyle = '#e63946';
+    ctx.beginPath();
+    ctx.moveTo(-w*0.2, -h*0.1);
+    ctx.quadraticCurveTo(-w*0.5, -h*0.5 - flap, -w*0.7, 0);
+    ctx.quadraticCurveTo(-w*0.4, h*0.5 + flap, -w*0.2, h*0.1);
+    ctx.closePath();
+    ctx.fill();
+
+    // Tail
+    ctx.fillStyle = '#c1121f';
+    ctx.beginPath();
+    ctx.moveTo(-w*0.55, 0);
+    ctx.lineTo(-w*0.8, -6);
+    ctx.lineTo(-w*0.8, 6);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawBackground() {
+    const w = canvas.width / DPR;
+    const h = canvas.height / DPR;
+    // parallax clouds
+    state.skyOffset = (state.skyOffset - state.speed*0.2);
+    if (state.skyOffset < -w) state.skyOffset += w;
+    ctx.globalAlpha = 0.25;
+    for (let i = 0; i < 2; i++) {
+      const x = state.skyOffset + i * w;
+      drawCloud(x + 60, h*0.25, 36);
+      drawCloud(x + w*0.6, h*0.18, 28);
+      drawCloud(x + w*0.35, h*0.35, 32);
+      drawCloud(x + w*0.85, h*0.3, 40);
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawCloud(cx, cy, r) {
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.arc(cx+r*0.7, cy+3, r*0.8, 0, Math.PI*2);
+    ctx.arc(cx-r*0.7, cy+3, r*0.8, 0, Math.PI*2);
+    ctx.arc(cx, cy+8, r*0.9, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawPipes() {
+    const h = canvas.height / DPR;
+    for (const p of state.pipes) {
+      // Top
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--pipe').trim() || '#2a9d8f';
+      ctx.fillRect(p.x, 0, p.w, p.top);
+      // Bottom
+      ctx.fillRect(p.x, p.top + p.gap, p.w, h - (p.top + p.gap));
+      // Lids
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--pipe-dark').trim() || '#1f776e';
+      ctx.fillRect(p.x-2, p.top-10, p.w+4, 12);
+      ctx.fillRect(p.x-2, p.top + p.gap -2, p.w+4, 12);
+    }
+  }
+
+  function randomPipe() {
+    const w = canvas.width / DPR;
+    const h = canvas.height / DPR;
+    const minTop = 40;
+    const maxTop = h - state.gap - 60;
+    const top = Math.random() * (maxTop - minTop) + minTop;
+    return { x: w + 10, w: 54, top, gap: state.gap, passed: false };
+  }
+
+  function resetGame() {
+    state.score = 0;
+    state.frame = 0;
+    state.pipes = [];
+    state.over = false;
+    state.paused = false;
+    state.speed = 2.2;
+    state.gap = 160;
+    state.dragon = { x: 80, y: (canvas.height/DPR)/2, w: 42, h: 34, vy: 0, angle: 0 };
+    // Prime first pipes
+    for (let i = 0; i < 3; i++) {
+      const p = randomPipe();
+      p.x += i * 180;
+      state.pipes.push(p);
+    }
+  }
+
+  function setRunning(on) {
+    state.running = on;
+    document.getElementById('overlay').hidden = on;
+  }
+
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 1400);
+  }
+
+  // Physics + logic
+  function update() {
+    if (!state.running || state.paused || state.over) return;
+
+    const w = canvas.width / DPR;
+    const h = canvas.height / DPR;
+
+    // Difficulty ramp
+    if (state.frame % 360 === 0 && state.frame > 0) {
+      state.speed = Math.min(state.speed + 0.15, 4.2);
+      state.gap = Math.max(state.gap - 6, 120);
+      toast("🔥 ¡Más difícil!");
+    }
+
+    // Dragon motion
+    state.dragon.vy += state.gravity;
+    state.dragon.y += state.dragon.vy;
+    state.dragon.angle = Math.atan2(state.dragon.vy, 6) * 0.6;
+
+    // ground/ceiling
+    if (state.dragon.y + state.dragon.h/2 >= h || state.dragon.y - state.dragon.h/2 <= 0) {
+      gameOver();
+    }
+
+    // Pipes movement
+    for (const p of state.pipes) {
+      p.x -= state.speed;
+      // scoring
+      if (!p.passed && p.x + p.w < state.dragon.x - state.dragon.w/2) {
+        p.passed = true;
+        state.score++;
+        document.getElementById('score').textContent = state.score;
+        if (state.score > state.best) {
+          state.best = state.score;
+          localStorage.setItem('flappy_dragon_best', String(state.best));
+          document.getElementById('best').textContent = '🏆 ' + state.best;
+        }
+      }
+      // collision
+      const dx = state.dragon.x;
+      const dy = state.dragon.y;
+      if (dx + state.dragon.w/2 > p.x && dx - state.dragon.w/2 < p.x + p.w) {
+        if (dy - state.dragon.h/2 < p.top || dy + state.dragon.h/2 > p.top + p.gap) {
+          gameOver();
+        }
+      }
+    }
+
+    // Spawn/remove
+    if (state.pipes.length === 0 || (state.pipes[state.pipes.length-1].x < w - 180)) {
+      state.pipes.push(randomPipe());
+    }
+    if (state.pipes[0].x + state.pipes[0].w < -10) {
+      state.pipes.shift();
+    }
+
+    state.frame++;
+  }
+
+  function draw() {
+    const w = canvas.width / DPR;
+    const h = canvas.height / DPR;
+    ctx.clearRect(0, 0, w, h);
+    drawBackground();
+    drawPipes();
+    drawDragon();
+
+    if (state.over) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('GAME OVER', w/2, h/2 - 20);
+      ctx.font = '16px system-ui, -apple-system, sans-serif';
+      ctx.fillText('Toca para reiniciar', w/2, h/2 + 12);
+      ctx.restore();
+    }
+  }
+
+  function gameOver() {
+    if (state.over) return;
+    state.over = true;
+  }
+
+  function flap() {
+    if (!state.running) {
+      setRunning(true);
+      resetGame();
+    }
+    if (state.over) {
+      resetGame();
+      return;
+    }
+    if (state.paused) return;
+    state.dragon.vy = state.lift;
+  }
+
+  // Main loop
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  // UI controls (touch-friendly)
+  function prevent(e) { e.preventDefault(); }
+  window.addEventListener('gesturestart', prevent);
+  window.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+  window.addEventListener('touchstart', () => flap(), { passive: false });
+  window.addEventListener('mousedown', () => flap());
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') flap();
+    if (e.code === 'KeyP') togglePause();
+  });
+
+  document.getElementById('tapBtn').addEventListener('click', flap);
+  document.getElementById('pauseBtn').addEventListener('click', () => togglePause());
+  document.getElementById('playBtn').addEventListener('click', () => { setRunning(true); resetGame(); });
+  document.getElementById('howBtn').addEventListener('click', () => {
+    toast('Toca para subir, evita las torres.');
+  });
+
+  function togglePause() {
+    if (!state.running || state.over) return;
+    state.paused = !state.paused;
+    toast(state.paused ? '⏸ Pausa' : '▶️ Reanudado');
+  }
+
+  // Initialize UI
+  document.getElementById('best').textContent = '🏆 ' + state.best;
+  document.getElementById('overlay').hidden = false;
+
+  // iOS address bar hide on start
+  window.addEventListener('load', () => setTimeout(() => window.scrollTo(0,1), 50));
+})();
+</script>
+</body>
+</html>
